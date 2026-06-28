@@ -15,7 +15,7 @@ client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 # CONFIGURATION
 # ==========================================
 ACCESS_TOKEN = os.getenv("GROUPME_ACCESS_TOKEN")
-GROUP_IDS = ["61441708", "100216530"]
+GROUP_IDS = [g.strip() for g in os.getenv("GROUPME_GROUP_IDS", "").split(",") if g.strip()]
 OUTPUT_FILE = "subleases_bulkV3.txt"
 FLYERS_FILE = "potential_flyers_bulk.txt"
 LIMIT_PER_REQUEST = 100

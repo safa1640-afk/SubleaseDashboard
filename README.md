@@ -15,19 +15,24 @@ cd SubleaseDashboard
 pip install -r requirements.txt
 ```
 
-**3. Add your API keys**
+**3. Add your API keys and group IDs**
 
 Copy the example env file and fill it in:
 ```bash
 cp .env.example .env
 ```
 
-- **GroupMe token** → log in at [dev.groupme.com](https://dev.groupme.com), your token is shown on the page
-- **Gemini API key** → create one at [aistudio.google.com](https://aistudio.google.com) (free, just needs a Google account)
+Then edit `.env` with your values:
 
-**4. Set your Group IDs**
+- **`GROUPME_ACCESS_TOKEN`** → log in at [dev.groupme.com](https://dev.groupme.com) — your token is displayed on the page
+- **`GOOGLE_API_KEY`** → create one at [aistudio.google.com](https://aistudio.google.com) (free, just needs a Google account)
+- **`GROUPME_GROUP_IDS`** → comma-separated list of GroupMe group IDs you want to scan (e.g. `123456,789012`)
 
-In `GroupMeParser.py`, update `GROUP_IDS` with the GroupMe group IDs you want to scan. You can find a group's ID in its URL on the GroupMe web app.
+**Finding your Group IDs:**
+1. Open [web.groupme.com](https://web.groupme.com) in a browser
+2. Click into the group you want to scan
+3. The URL will look like `https://web.groupme.com/groups/61441708` — the number at the end is the group ID
+4. Add as many as you want, separated by commas: `GROUPME_GROUP_IDS=61441708,100216530`
 
 ## Usage
 
@@ -35,13 +40,13 @@ In `GroupMeParser.py`, update `GROUP_IDS` with the GroupMe group IDs you want to
 ```bash
 python GroupMeParser.py
 ```
-This scans your groups, runs each candidate message through Gemini, and writes confirmed listings to `subleases_bulkV3.txt`.
+Scans your groups back to January 1 2026, runs each candidate message through Gemini, and writes confirmed listings to `subleases_bulkV3.txt`.
 
 **Step 2 — Build the dashboard:**
 ```bash
 python DashboardScript.py
 ```
-Opens `index.html` — open it in any browser. Supports filtering by price, gender preference, and image, with live search.
+Generates `index.html` — open it in any browser. Supports filtering by max price, gender preference, and image, with live search and a result count.
 
 ## Notes
 
