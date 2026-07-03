@@ -10,8 +10,10 @@ git clone https://github.com/safa1640-afk/SubleaseDashboard.git
 cd SubleaseDashboard
 ```
 
-**2. Install dependencies**
+**2. Create a virtual environment and install dependencies**
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
