@@ -1,8 +1,12 @@
 import json
+import os
 import re
 from datetime import datetime
 
 def parse_bulk_file(filename="subleases_bulkV3.txt"):
+    if not os.path.exists(filename):
+        return []
+
     with open(filename, "r", encoding="utf-8") as f:
         content = f.read()
 
@@ -91,10 +95,10 @@ def parse_bulk_file(filename="subleases_bulkV3.txt"):
 
     return parsed_listings
 
-def generate_html_dashboard(listings, output_path="index.html"):
+def render_html(listings):
     json_data = json.dumps(listings)
-    
-    html_template = f"""<!DOCTYPE html>
+
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -145,14 +149,46 @@ def generate_html_dashboard(listings, output_path="index.html"):
         <input type="number" id="maxPrice" placeholder="e.g. 900" min="0" step="50"
                style="width:110px;" oninput="filterCards()">
     </div>
+    <button id="updateBtn" onclick="runUpdate()"
+            style="padding:10px 18px; border-radius:6px; border:none; background:#1e8e3e; color:white; font-size:14px; font-weight:600; cursor:pointer;">
+        Update
+    </button>
 </div>
 
+<p id="updateStatus" style="text-align:center; font-size:13px; color:#888; margin-bottom:8px;"></p>
 <p id="resultCount" style="text-align:center; font-size:14px; color:#888; margin-bottom:16px;"></p>
 <div class="grid" id="cardContainer"></div>
 
 <script>
-    const data = {json_data};
+    let data = {json_data};
     const container = document.getElementById('cardContainer');
+
+    async function runUpdate() {{
+        const btn = document.getElementById('updateBtn');
+        const status = document.getElementById('updateStatus');
+        btn.disabled = true;
+        btn.textContent = 'Checking for new listings...';
+        status.textContent = '';
+
+        try {{
+            const res = await fetch('/update', {{ method: 'POST' }});
+            if (!res.ok) throw new Error(`Server returned ${{res.status}}`);
+            const result = await res.json();
+
+            data = result.listings;
+            filterCards();
+
+            const now = new Date().toLocaleTimeString();
+            status.textContent = result.added > 0
+                ? `Added ${{result.added}} new listing(s) — last checked ${{now}}`
+                : `No new listings since last check — last checked ${{now}}`;
+        }} catch (err) {{
+            status.textContent = `Update failed: ${{err.message}}`;
+        }} finally {{
+            btn.disabled = false;
+            btn.textContent = 'Update';
+        }}
+    }}
 
     function displayCards(filteredData) {{
         container.innerHTML = '';
@@ -243,8 +279,11 @@ def generate_html_dashboard(listings, output_path="index.html"):
 </body>
 </html>"""
 
+
+def generate_html_dashboard(listings, output_path="index.html"):
+    html = render_html(listings)
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(html_template)
+        f.write(html)
     print(f"Dashboard compiled successfully as '{output_path}'!")
 
 if __name__ == "__main__":

@@ -18,8 +18,10 @@ ACCESS_TOKEN = os.getenv("GROUPME_ACCESS_TOKEN")
 GROUP_IDS = [g.strip() for g in os.getenv("GROUPME_GROUP_IDS", "").split(",") if g.strip()]
 OUTPUT_FILE = "subleases_bulkV3.txt"
 FLYERS_FILE = "potential_flyers_bulk.txt"
+STATE_FILE = "last_synced.json"
 LIMIT_PER_REQUEST = 100
 
+# Fallback cutoff used only the very first time a group is synced
 START_TIMESTAMP = int(datetime(2026, 1, 1).timestamp())
 
 # Positive keywords — word boundaries prevent substring false matches
@@ -39,9 +41,38 @@ EXCLUDE_PATTERNS = [
 
 
 def content_hash(text):
-    """Stable hash for deduplication across groups."""
+    """Stable hash for deduplication across groups and across runs."""
     normalized = re.sub(r"\s+", " ", text.strip().lower())
     return hashlib.md5(normalized.encode()).hexdigest()
+
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+
+
+def load_existing_hashes():
+    """Read whatever's already in OUTPUT_FILE so appended runs don't duplicate entries."""
+    hashes = set()
+    if not os.path.exists(OUTPUT_FILE):
+        return hashes
+
+    with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    for entry in content.split("--- SUBLEASE ENTRY START ---"):
+        match = re.search(r"CONTENT:\s*\n([\s\S]*?)\n--- SUBLEASE ENTRY END ---", entry)
+        if match:
+            hashes.add(content_hash(match.group(1)))
+
+    return hashes
 
 
 def fetch_messages(group_id, token, before_id=None):
@@ -125,25 +156,32 @@ Message:
                 return "NO"
 
 
+def sync(group_ids=None, progress=print):
+    """
+    Fetch messages newer than the last synced timestamp for each group,
+    classify candidates, and append confirmed listings to OUTPUT_FILE.
 
+    Returns the number of newly confirmed listings saved.
+    """
+    group_ids = group_ids if group_ids is not None else GROUP_IDS
+    state = load_state()
+    seen_hashes = load_existing_hashes()
 
-def main():
-    print("Starting sublease extraction (V3) with AI filtering...")
     total_saved = 0
     total_flyers = 0
 
-    # Tracks content hashes across all groups to deduplicate cross-posted messages
-    seen_hashes = set()
+    with open(OUTPUT_FILE, "a", encoding="utf-8") as f, \
+         open(FLYERS_FILE, "a", encoding="utf-8") as flyer_file:
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f, \
-         open(FLYERS_FILE, "w", encoding="utf-8") as flyer_file:
+        for group_id in group_ids:
+            cutoff = state.get(group_id, START_TIMESTAMP)
+            progress(f"\nScanning Group ID: {group_id} (since {datetime.fromtimestamp(cutoff)})")
 
-        for group_id in GROUP_IDS:
-            print(f"\nScanning Group ID: {group_id}")
             before_id = None
             group_saved = 0
             flyer_saved = 0
             reached_cutoff = False
+            newest_seen = cutoff
 
             while not reached_cutoff:
                 messages = fetch_messages(group_id, ACCESS_TOKEN, before_id)
@@ -153,14 +191,16 @@ def main():
                     continue
 
                 if not messages:
-                    print(f"  Reached the beginning of group {group_id}.")
+                    progress(f"  Reached the beginning of group {group_id}.")
                     break
+
+                if before_id is None and messages:
+                    newest_seen = max(newest_seen, messages[0].get("created_at", 0))
 
                 for msg in messages:
                     created_at_unix = msg.get("created_at", 0)
 
-                    if created_at_unix < START_TIMESTAMP:
-                        print(f"  Reached January 2026 cutoff for group {group_id}.")
+                    if created_at_unix <= cutoff:
                         reached_cutoff = True
                         break
 
@@ -182,17 +222,16 @@ def main():
                     is_noise = any(re.search(pat, text_lower) for pat in EXCLUDE_PATTERNS)
 
                     if is_sublease_mention and not is_noise:
-                        # Cross-group dedup: skip exact same content already saved from another group
                         h = content_hash(text)
                         if h in seen_hashes:
-                            print(f"  Skipping cross-group duplicate: {text[:40].replace(chr(10), ' ')}...")
+                            progress(f"  Skipping duplicate: {text[:40].replace(chr(10), ' ')}...")
                             continue
 
-                        print(f"  Testing: {text[:40].replace(chr(10), ' ')}...")
+                        progress(f"  Testing: {text[:40].replace(chr(10), ' ')}...")
                         decision = classify_message(text)
 
                         if decision == "YES":
-                            print("  -> AI Confirmed! Saving.")
+                            progress("  -> AI Confirmed! Saving.")
                             seen_hashes.add(h)
                             f.write("--- SUBLEASE ENTRY START ---\n")
                             f.write(f"GROUP ID: {group_id}\n")
@@ -201,10 +240,11 @@ def main():
                             f.write(f"IMAGE URL: {image_url}\n")
                             f.write(f"CONTENT:\n{text}\n")
                             f.write("--- SUBLEASE ENTRY END ---\n\n")
+                            f.flush()
                             group_saved += 1
                             total_saved += 1
                         else:
-                            print("  -> AI Rejected.")
+                            progress("  -> AI Rejected.")
 
                         # 4s delay keeps us under the 15 RPM free-tier limit
                         time.sleep(4)
@@ -216,18 +256,26 @@ def main():
                         flyer_file.write(f"IMAGE URL: {image_url}\n")
                         flyer_file.write("[Image Only]\n")
                         flyer_file.write("--- FLYER ENTRY END ---\n\n")
+                        flyer_file.flush()
                         flyer_saved += 1
                         total_flyers += 1
 
                 if not reached_cutoff and messages:
                     before_id = messages[-1]["id"]
-                    print(f"  Processed down to: {datetime.fromtimestamp(messages[-1].get('created_at', 0)).strftime('%Y-%m-%d')}")
+                    progress(f"  Processed down to: {datetime.fromtimestamp(messages[-1].get('created_at', 0)).strftime('%Y-%m-%d')}")
                     time.sleep(0.5)
 
-            print(f"Finished Group {group_id}. Saved {group_saved} listings and {flyer_saved} image flyers.")
+            state[group_id] = newest_seen
+            progress(f"Finished Group {group_id}. Saved {group_saved} new listings and {flyer_saved} new image flyers.")
 
-    print(f"\nAll done! Saved {total_saved} confirmed listings to '{OUTPUT_FILE}'.")
-    print(f"Saved {total_flyers} image-only entries to '{FLYERS_FILE}'.")
+    save_state(state)
+    progress(f"\nSync complete. Saved {total_saved} newly confirmed listings, {total_flyers} new image-only entries.")
+    return total_saved
+
+
+def main():
+    print("Starting sublease extraction (V3) with AI filtering...")
+    sync()
 
 
 if __name__ == "__main__":

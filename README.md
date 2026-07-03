@@ -36,20 +36,20 @@ Then edit `.env` with your values:
 
 ## Usage
 
-**Step 1 — Fetch and filter listings:**
+**Run the dashboard server:**
 ```bash
-python GroupMeParser.py
+python app.py
 ```
-Scans your groups back to January 1 2026, runs each candidate message through Gemini, and writes confirmed listings to `subleases_bulkV3.txt`.
+Open [http://127.0.0.1:5001](http://127.0.0.1:5001) in your browser. The first load scans back to January 1 2026. From then on, just click **Update** on the dashboard whenever you want fresh listings — it only fetches messages newer than the last sync (tracked in `last_synced.json`), runs them through Gemini, and appends any confirmed listings without re-scanning or re-classifying anything already seen.
 
-**Step 2 — Build the dashboard:**
+**Command-line alternative (no server):**
 ```bash
-python DashboardScript.py
+python GroupMeParser.py   # incremental fetch + filter, appends to subleases_bulkV3.txt
+python DashboardScript.py # regenerates a static index.html from that file
 ```
-Generates `index.html` — open it in any browser. Supports filtering by max price, gender preference, and image, with live search and a result count.
 
 ## Notes
 
 - The free Gemini tier allows 1,500 requests/day — more than enough for a full run
 - The script paces itself at ~15 requests/minute to stay within rate limits
-- Output files (`.txt`, `.html`) are gitignored since they contain scraped data
+- Output files (`.txt`, `.html`, `last_synced.json`) are gitignored since they contain scraped data / local state
