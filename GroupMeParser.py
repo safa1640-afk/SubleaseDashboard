@@ -21,12 +21,15 @@ FLYERS_FILE = "potential_flyers_bulk.txt"
 STATE_FILE = "last_synced.json"
 LIMIT_PER_REQUEST = 100
 
+# What Gemini should treat as a relevant listing; change it in .env, no code edits needed
+TARGET_TERM = os.getenv("TARGET_TERM", "Spring 2027 or Summer 2027")
+
 # Fallback cutoff used only the very first time a group is synced
 START_TIMESTAMP = int(datetime(2026, 1, 1).timestamp())
 
 # Positive keywords — word boundaries prevent substring false matches
 SUBLEASE_KEYWORDS = [
-    r"\bsublease\b", r"\bsublet\b", r"\bsummer\b",
+    r"\bsublease\w*", r"\bsublet\w*", r"\brelet\w*", r"\bsummer\b", r"\bspring\b",
     r"\blease\b", r"\brent\b", r"\broom\b", r"\bapartment\b"
 ]
 
@@ -42,6 +45,8 @@ EXCLUDE_PATTERNS = [
 
 def content_hash(text):
     """Stable hash for deduplication across groups and across runs."""
+    # An edited message is re-sent as: Name edited to: “original text”. Treat it as the original.
+    text = re.sub(r"^[^\n]{0,60}?\bedited to:\s*[“\"]?", "", text.strip(), flags=re.IGNORECASE).rstrip("”\"")
     normalized = re.sub(r"\s+", " ", text.strip().lower())
     return hashlib.md5(normalized.encode()).hexdigest()
 
@@ -95,20 +100,38 @@ def fetch_messages(group_id, token, before_id=None):
     return []
 
 
-def classify_message(text, retries=3):
+def classify_message(text, retries=5):
     """
     Ask Gemini whether a message is a genuine sublease offer.
     Retries with exponential backoff on rate-limit / transient errors.
-    Returns YES or NO.
+    Returns a dict: {"sublease": False}, or {"sublease": True, rent, layout, gender,
+    location, term}. Raises RuntimeError if Gemini keeps failing.
     """
 
     prompt = f"""
 
-Is this message offering housing for rent, sublease, relet, or lease takeover?
+Today's date is {datetime.now().strftime("%B %d, %Y")}.
+
+Is this message OFFERING housing (rent, sublease, relet, or lease takeover) that would be
+available for: {TARGET_TERM}?
+
+Rules:
+- Posts covering multiple terms count if one of them matches (e.g. "Spring/Summer sublease").
+- Posts with no dates at all count, since they are probably current.
+- Reject posts that are only for a term that has already passed or a different, non-matching term.
+- Reject people who are LOOKING for housing or a roommate rather than offering a place.
+
+If it IS a matching offer, also extract these fields from the post (use null when not stated):
+- "rent": monthly rent for ONE person's spot, as an integer in USD. Ignore parking, deposits,
+  fees, utilities and one-time costs. If a total and a per-person price are both given, use per-person.
+- "layout": the whole unit as "<beds>B/<baths>B" (e.g. "2B/2B"), or "Studio".
+- "gender": "Female Only" or "Male Only" if the post restricts or prefers one, else "Co-ed / Any".
+- "location": the apartment complex name or street address, as written in the post.
+- "term": the dates or semesters it is available, short (e.g. "Jan 2027 - Jul 2027").
 
 Reply ONLY with valid JSON in exactly one of these formats:
 
-{{"sublease": true}}
+{{"sublease": true, "rent": 850, "layout": "2B/2B", "gender": "Co-ed / Any", "location": "The Lark", "term": "May 2027 - Aug 2027"}}
 
 or
 
@@ -118,7 +141,7 @@ Message:
 {text}
 """
 
-    delay = 5
+    delay = 15
 
     for attempt in range(retries):
         try:
@@ -136,7 +159,7 @@ Message:
 
             data = json.loads(raw)
 
-            return "YES" if data.get("sublease") is True else "NO"
+            return data if data.get("sublease") is True else {"sublease": False}
 
         except Exception as e:
             err = str(e)
@@ -149,11 +172,26 @@ Message:
                 time.sleep(delay)
                 delay *= 2
             else:
-                print(
-                    f"  API Error (all retries exhausted): "
-                    f"{err}. Skipping message."
-                )
-                return "NO"
+                # Don't guess "NO": that would drop a real listing for good once the
+                # sync cutoff moves past it. Abort so the next run re-checks it.
+                raise RuntimeError(f"Gemini classification failed after {retries} attempts: {err}")
+
+
+def entry_fields(info):
+    """AI-extracted fields as header lines for a saved entry; the dashboard reads these."""
+    def one_line(v):
+        if v in (None, "") or str(v).strip().lower() == "null":
+            return "UNKNOWN"
+        # models sometimes write ranges like "Jan 2027 - null"
+        return re.sub(r"\s*[-–]\s*null\b", "", re.sub(r"\s+", " ", str(v))).strip()
+
+    return (
+        f"RENT: {one_line(info.get('rent'))}\n"
+        f"LAYOUT: {one_line(info.get('layout'))}\n"
+        f"GENDER: {one_line(info.get('gender') or 'Co-ed / Any')}\n"
+        f"LOCATION: {one_line(info.get('location'))}\n"
+        f"TERM: {one_line(info.get('term'))}\n"
+    )
 
 
 def sync(group_ids=None, progress=print):
@@ -228,9 +266,9 @@ def sync(group_ids=None, progress=print):
                             continue
 
                         progress(f"  Testing: {text[:40].replace(chr(10), ' ')}...")
-                        decision = classify_message(text)
+                        info = classify_message(text)
 
-                        if decision == "YES":
+                        if info["sublease"]:
                             progress("  -> AI Confirmed! Saving.")
                             seen_hashes.add(h)
                             f.write("--- SUBLEASE ENTRY START ---\n")
@@ -238,6 +276,7 @@ def sync(group_ids=None, progress=print):
                             f.write(f"DATE: {date_str}\n")
                             f.write(f"IMAGE ATTACHED: {has_image}\n")
                             f.write(f"IMAGE URL: {image_url}\n")
+                            f.write(entry_fields(info))
                             f.write(f"CONTENT:\n{text}\n")
                             f.write("--- SUBLEASE ENTRY END ---\n\n")
                             f.flush()

@@ -28,6 +28,7 @@ Then edit `.env` with your values:
 
 - **`GROUPME_ACCESS_TOKEN`** → log in at [dev.groupme.com](https://dev.groupme.com) — your token is displayed on the page
 - **`GOOGLE_API_KEY`** → create one at [aistudio.google.com](https://aistudio.google.com) (free, just needs a Google account)
+- **`TARGET_TERM`** → (optional) the term you're hunting for, in plain English, e.g. `Spring 2027 or Summer 2027`. Gemini uses it to decide which posts are relevant and extracts rent, layout, location and term for each card
 - **`GROUPME_GROUP_IDS`** → comma-separated list of GroupMe group IDs you want to scan (e.g. `123456,789012`)
 
 **Finding your Group IDs:**

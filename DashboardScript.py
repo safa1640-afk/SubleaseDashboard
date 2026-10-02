@@ -77,6 +77,22 @@ def parse_bulk_file(filename="subleases_bulkV3.txt"):
                 if city_match:
                     location = city_match.group(1).title()
 
+        # AI-extracted header fields (written by GroupMeParser) beat the regex guesses above.
+        # Entries saved before those fields existed just keep the regex values.
+        header = entry.split("CONTENT:")[0]
+
+        def header_field(name):
+            m = re.search(rf"^{name}:[ \t]*(.+)$", header, re.MULTILINE)
+            v = m.group(1).strip() if m else ""
+            return "" if v.upper() == "UNKNOWN" else v
+
+        if header_field("RENT").isdigit():
+            price = f"${header_field('RENT')}"
+        layout = header_field("LAYOUT") or layout
+        gender = header_field("GENDER") or gender
+        location = header_field("LOCATION") or location
+        term = header_field("TERM")
+
         clean_text = content_block.replace("\n", "<br>")
 
         parsed_listings.append(
@@ -86,6 +102,7 @@ def parse_bulk_file(filename="subleases_bulkV3.txt"):
                 "location": location,
                 "price": price,
                 "layout": layout,
+                "term": term,
                 "gender": gender,
                 "image": has_image,
                 "image_url": img_url,
@@ -207,6 +224,7 @@ def render_html(listings):
                     <span class="tag price">${{item.price}}</span>
                     <span class="tag">${{item.layout}}</span>
                     <span class="tag gender">${{item.gender}}</span>
+                    ${{item.term ? `<span class="tag">${{item.term}}</span>` : ''}}
                 </div>
                 <div class="card-body">
                     ${{imageHtml}}
